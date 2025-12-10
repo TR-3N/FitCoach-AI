@@ -1,20 +1,18 @@
 package com.example.fitcoachai
 
+import android.content.Context
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.widget.Button
 import android.widget.TextView
-import androidx.appcompat.app.AppCompatActivity
-import okhttp3.Call
-import okhttp3.Callback
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
+import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
@@ -32,36 +30,42 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     private lateinit var txtStatus: TextView
     private lateinit var txtConfidence: TextView
 
-    private val sampleBuffer = mutableListOf<Sample>()
-    private var isTracking = false
-    private var startTimeNs: Long = 0L
-
-    private val windowSeconds = 1.5f
-    private val stepMillis = 1000L
-
-    private val handler = Handler(Looper.getMainLooper())
-
-    // CHANGE to your laptop IP
-    private val serverUrl = "http://192.168.29.32:8000/classify_window"
-
-    private val client: OkHttpClient by lazy { OkHttpClient.Builder().build() }
-
     data class Sample(
-        val time: Float,
-        val ax: Float,
-        val ay: Float,
-        val az: Float,
-        val gx: Float,
-        val gy: Float,
-        val gz: Float
+        val t: Double,
+        val ax: Double,
+        val ay: Double,
+        val az: Double,
+        val gx: Double,
+        val gy: Double,
+        val gz: Double
     )
+
+    private val sampleBuffer = ArrayList<Sample>()
+    private var startTimeNs: Long = 0L
+    private val windowSeconds = 3.0
+    private val minSamples = 50
+    private val handler = Handler(Looper.getMainLooper())
+    private var isTracking = false
+
+    // latest sensor values
+    private var lastAx = 0.0
+    private var lastAy = 0.0
+    private var lastAz = 0.0
+    private var lastGx = 0.0
+    private var lastGy = 0.0
+    private var lastGz = 0.0
+
+    // HTTP
+    private val client = OkHttpClient()
+    // TODO: change to your real laptop IP (not 127.0.0.1)
+    private val serverUrl = "http://192.168.29.32:8000/classify_window"
 
     private val sendWindowRunnable = object : Runnable {
         override fun run() {
             if (!isTracking) return
-            println("DEBUG: runnable tick")
+            Log.d("FitCoachAI", "Runnable tick, buffer size = ${sampleBuffer.size}")
             sendCurrentWindow()
-            handler.postDelayed(this, stepMillis)
+            handler.postDelayed(this, 1500L)
         }
     }
 
@@ -74,18 +78,12 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         txtStatus = findViewById(R.id.txtStatus)
         txtConfidence = findViewById(R.id.txtConfidence)
 
-        sensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+        sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
         accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         gyroSensor = sensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE)
 
-        btnStart.setOnClickListener {
-            println("DEBUG: Start button clicked")
-            startTracking()
-        }
-        btnStop.setOnClickListener {
-            println("DEBUG: Stop button clicked")
-            stopTracking()
-        }
+        btnStart.setOnClickListener { startTracking() }
+        btnStop.setOnClickListener { stopTracking() }
     }
 
     private fun startTracking() {
@@ -101,11 +99,11 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
 
-        txtStatus.text = "Preparing..."
-        txtStatus.setTextColor(0xFFFFFFFF.toInt())
+        txtStatus.text = "Collecting..."
         txtConfidence.text = "Confidence —"
+        Log.d("FitCoachAI", "Start tracking")
 
-        handler.postDelayed(sendWindowRunnable, stepMillis)
+        handler.postDelayed(sendWindowRunnable, 1000L)
     }
 
     private fun stopTracking() {
@@ -113,71 +111,70 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
         isTracking = false
         sensorManager.unregisterListener(this)
         handler.removeCallbacks(sendWindowRunnable)
-        txtStatus.text = "Idle"
-        txtStatus.setTextColor(0xFFFFFFFF.toInt())
-        txtConfidence.text = "Confidence —"
+
+        txtStatus.text = "Stopped"
+        txtConfidence.text = ""
+        Log.d("FitCoachAI", "Stop tracking")
     }
 
-    override fun onSensorChanged(event: SensorEvent?) {
-        if (!isTracking || event == null) return
+    override fun onSensorChanged(event: SensorEvent) {
+        if (!isTracking) return
 
-        if (startTimeNs == 0L) startTimeNs = event.timestamp
-        val tSec = (event.timestamp - startTimeNs) / 1_000_000_000.0f
-
-        val ax: Float
-        val ay: Float
-        val az: Float
-        val gx: Float
-        val gy: Float
-        val gz: Float
+        if (startTimeNs == 0L) {
+            startTimeNs = event.timestamp
+        }
+        val tSec = (event.timestamp - startTimeNs) / 1_000_000_000.0
 
         when (event.sensor.type) {
             Sensor.TYPE_ACCELEROMETER -> {
-                ax = event.values[0]
-                ay = event.values[1]
-                az = event.values[2]
-                gx = 0f; gy = 0f; gz = 0f
+                lastAx = event.values[0].toDouble()
+                lastAy = event.values[1].toDouble()
+                lastAz = event.values[2].toDouble()
             }
             Sensor.TYPE_GYROSCOPE -> {
-                gx = event.values[0]
-                gy = event.values[1]
-                gz = event.values[2]
-                ax = 0f; ay = 0f; az = 0f
+                lastGx = event.values[0].toDouble()
+                lastGy = event.values[1].toDouble()
+                lastGz = event.values[2].toDouble()
             }
             else -> return
         }
 
-        sampleBuffer.add(Sample(tSec, ax, ay, az, gx, gy, gz))
+        val sample = Sample(tSec, lastAx, lastAy, lastAz, lastGx, lastGy, lastGz)
+        sampleBuffer.add(sample)
 
         val minTime = tSec - windowSeconds
-        while (sampleBuffer.isNotEmpty() && sampleBuffer.first().time < minTime) {
+        while (sampleBuffer.isNotEmpty() && sampleBuffer.first().t < minTime) {
             sampleBuffer.removeAt(0)
         }
-
-        println("DEBUG: sensor sample added, buffer size = ${sampleBuffer.size}")
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {
+        // not used
+    }
 
     private fun sendCurrentWindow() {
-        println("DEBUG: sendCurrentWindow called, buffer size = ${sampleBuffer.size}")
-        if (sampleBuffer.isEmpty()) return
+        if (sampleBuffer.size < minSamples) {
+            Log.d("FitCoachAI", "window too small (${sampleBuffer.size}), skipping")
+            return
+        }
 
-        val samplesJson = JSONArray()
+        Log.d("FitCoachAI", "sendCurrentWindow called, sending ${sampleBuffer.size} samples")
+
+        val samplesArray = JSONArray()
         for (s in sampleBuffer) {
             val obj = JSONObject()
-            obj.put("time", s.time.toDouble())
-            obj.put("ax", s.ax.toDouble())
-            obj.put("ay", s.ay.toDouble())
-            obj.put("az", s.az.toDouble())
-            obj.put("gx", s.gx.toDouble())
-            obj.put("gy", s.gy.toDouble())
-            obj.put("gz", s.gz.toDouble())
-            samplesJson.put(obj)
+            obj.put("t", s.t)
+            obj.put("ax", s.ax)
+            obj.put("ay", s.ay)
+            obj.put("az", s.az)
+            obj.put("gx", s.gx)
+            obj.put("gy", s.gy)
+            obj.put("gz", s.gz)
+            samplesArray.put(obj)
         }
 
         val root = JSONObject()
-        root.put("samples", samplesJson)
+        root.put("window", samplesArray)   // must match WindowIn.window
 
         val mediaType = "application/json; charset=utf-8".toMediaType()
         val body = root.toString().toRequestBody(mediaType)
@@ -189,42 +186,51 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
 
         client.newCall(request).enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
+                Log.e("FitCoachAI", "HTTP failure: ${e.message}")
                 runOnUiThread {
                     txtStatus.text = "Server error"
-                    txtStatus.setTextColor(0xFFFFC107.toInt())
                     txtConfidence.text = ""
                 }
             }
 
             override fun onResponse(call: Call, response: Response) {
                 response.use {
-                    val respBody = it.body?.string() ?: return
-                    try {
-                        val obj = JSONObject(respBody)
-                        val label = obj.optString("label", "UNKNOWN")
-                        val conf = obj.optDouble("confidence", 0.0)
-                        val confPct = (conf * 100).toInt()
+                    if (!response.isSuccessful) {
+                        Log.e("FitCoachAI", "HTTP error: ${response.code}")
+                        runOnUiThread {
+                            txtStatus.text = "Server error"
+                            txtConfidence.text = ""
+                        }
+                        return
+                    }
 
+                    val bodyStr = response.body?.string() ?: ""
+                    Log.d("FitCoachAI", "HTTP response: $bodyStr")
+
+                    try {
+                        val json = JSONObject(bodyStr)
+                        val label = json.optString("label", "UNKNOWN")
+                        val confidence = json.optDouble("confidence", 0.0)
+
+                        // SUCCESS UI UPDATE (modify this one)
                         runOnUiThread {
                             txtStatus.text = label
-                            if (label == "CORRECT") {
-                                txtStatus.setTextColor(0xFF4CAF50.toInt())
-                            } else if (label == "INCORRECT") {
-                                txtStatus.setTextColor(0xFFF44336.toInt())
-                            } else {
-                                txtStatus.setTextColor(0xFFFFFFFF.toInt())
-                            }
-                            txtConfidence.text = "Confidence $confPct%"
+                            val color = if (label == "CORRECT") 0xFF4CAF50.toInt() else 0xFFF44336.toInt()
+                            txtStatus.setTextColor(color)
+                            txtConfidence.text = "Confidence: ${"%.2f".format(confidence)}"
                         }
-                    } catch (ex: Exception) {
+                    } catch (e: Exception) {
+                        Log.e("FitCoachAI", "Parse error: ${e.message}")
+                        // ERROR UI UPDATE (leave this as is)
                         runOnUiThread {
                             txtStatus.text = "Parse error"
-                            txtStatus.setTextColor(0xFFFFC107.toInt())
                             txtConfidence.text = ""
                         }
                     }
+
                 }
             }
         })
     }
 }
+
