@@ -13,10 +13,9 @@ clf = joblib.load(MODEL_PATH)
 
 app = FastAPI(title="FitCoach-AI Bicep Curl API")
 
-
 # --------- Request models ---------
 class Sample(BaseModel):
-    time: float
+    t: float
     ax: float
     ay: float
     az: float
@@ -24,10 +23,8 @@ class Sample(BaseModel):
     gy: float
     gz: float
 
-
-class Window(BaseModel):
-    samples: List[Sample]
-
+class WindowIn(BaseModel):
+    window: List[Sample]
 
 # --------- Feature extraction (same logic as training) ---------
 def extract_features_from_window_df(df: pd.DataFrame) -> np.ndarray:
@@ -60,32 +57,31 @@ def extract_features_from_window_df(df: pd.DataFrame) -> np.ndarray:
 
     return np.array(features, dtype=float).reshape(1, -1)
 
-
 # --------- API endpoint ---------
 @app.post("/classify_window")
-def classify_window(window: Window):
+def classify_window(window_in: WindowIn):
     """
     Accept a short IMU window and return CORRECT / INCORRECT with confidence.
 
-    Request JSON format:
+    Expected JSON:
     {
-      "samples": [
-        {"time": 0.0, "ax": ..., "ay": ..., "az": ..., "gx": ..., "gy": ..., "gz": ...},
+      "window": [
+        {"t": 0.0, "ax": ..., "ay": ..., "az": ..., "gx": ..., "gy": ..., "gz": ...},
         ...
       ]
     }
     """
-    if not window.samples:
+    if not window_in.window:
         return {"error": "no samples"}
 
     data = {
-        "time": [s.time for s in window.samples],
-        "ax": [s.ax for s in window.samples],
-        "ay": [s.ay for s in window.samples],
-        "az": [s.az for s in window.samples],
-        "gx": [s.gx for s in window.samples],
-        "gy": [s.gy for s in window.samples],
-        "gz": [s.gz for s in window.samples],
+        "time": [s.t for s in window_in.window],
+        "ax": [s.ax for s in window_in.window],
+        "ay": [s.ay for s in window_in.window],
+        "az": [s.az for s in window_in.window],
+        "gx": [s.gx for s in window_in.window],
+        "gy": [s.gy for s in window_in.window],
+        "gz": [s.gz for s in window_in.window],
     }
     df = pd.DataFrame(data)
 
