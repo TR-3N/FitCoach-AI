@@ -58,7 +58,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // HTTP
     private val client = OkHttpClient()
     // TODO: change to your real laptop IP (not 127.0.0.1)
-    private val serverUrl = "http://192.168.29.32:8000/classify_window"
+    private val serverUrl = "http://10.115.76.155:8000/classify_window"
 
     private val sendWindowRunnable = object : Runnable {
         override fun run() {
