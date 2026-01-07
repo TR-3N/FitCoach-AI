@@ -73,7 +73,7 @@ class MainActivity : AppCompatActivity(), SensorEventListener {
     // HTTP
     private val client = OkHttpClient()
     // TODO: change to your real laptop IP (not 127.0.0.1)
-    private val serverUrl = "http://10.68.213.155:8000"
+    private val serverUrl = "http://0.0.0.00:8000"
     private val motionThreshold = 3.0f  //used for sending data only when having enough movements.
     private val sendWindowRunnable = object : Runnable {
         override fun run() {
